@@ -1,0 +1,220 @@
+\documentclass[submission,copyright,creativecommons]{eptcs}
+% \providecommand{\event}{SOS 2007} % Name of the event you are submitting to
+% \usepackage{breakurl}             % Not needed if you use pdflatex only.
+\usepackage{amsmath,amssymb,amsfonts,amsthm}
+\usepackage{fancyvrb}
+% so we can use \-/ for breakable dashes in long names
+\usepackage[shortcuts]{extdash}
+% \usepackage{bigfoot}
+% \usepackage{tikz}
+\usepackage{color}
+
+% \newtheorem{theorem}{Theorem}
+% \newtheorem{corollary}{Corollary}
+
+\usepackage{listings}
+\lstset{ %
+  basicstyle=\normalsize\ttfamily,
+  language=lisp,
+  columns=fullflexible,
+  escapeinside={\<}{\>},
+}
+
+
+\title{Rewriting In Support Of Bit-blasting}
+\author{Sol O. Swords
+\institute{Centaur Techology, Inc.\\
+Austin, TX, USA}
+\email{sswords@centtech.com}
+}
+\def\titlerunning{FIXME}
+\def\authorrunning{S. Swords}
+\begin{document}
+\maketitle
+
+\begin{abstract}
+
+{\it \color{red} Abstract: To be written}
+
+\end{abstract}
+
+\section{Introduction}
+\label{sec:intro}
+
+GL is an ACL2 framework for proving theorems using bit-level methods,
+namely BDD reasoning or SAT solving \cite{bit-blasting-GL, gl-diss}.
+It works by computing bit-level symbolic representations of terms,
+which we also describe as symbolically executing them.  To prove a
+theorem, it computes such a representation of the theorem's conclusion
+and thus reduces it to a satisfiability check: if the Boolean formula
+representing the conclusion is a tautology, then the theorem is
+proved.
+
+This paper introduces term-level reasoning capabilities that are now
+built into GL.  These capabilities allow GL to prove theorems at a
+higher level of abstraction, without computing a concrete
+representation for the value of each subterm encountered.  It also
+allows theorems to be proved about unconstrained variables by
+generating bit-level representations for accessors applied to those
+variables.
+
+\subsection{Extensions to ``Traditional'' GL}
+
+GL has always contained a symbolic object
+representation for function calls and unconstrained variables, but
+previously the use of such objects would almost guarantee failure.
+GL's previous use was \em{value-oriented}, as indicated by the use of the
+term ``symbolic execution'': the GL system would crawl over a term
+just as a simple applicative Lisp interpreter would, producing a
+(symbolic) value for each subterm.  Typical symbolic values expected
+to appear during a successful symbolic execution could include:
+
+\begin{itemize}
+\item symbolic Booleans -- represented as Boolean functions (BDDs or
+  AIGs, depending on the mode of operation)
+\item symbolic integers -- represented as a list of Boolean functions,
+  one for each two's-complement bit of the integer
+\item concrete values -- represented by themselves (except for objects
+  containing certain tagging symbols used to delineate kinds of
+  symbolic objects, which could then be tagged to ``escape'' them)
+\item conses of symbolic values.
+\end{itemize}
+
+In certain cases the symbolic values might also be expected to contain:
+
+\begin{itemize}
+\item if-then-else constructs, so that a symbolic value could take
+  various different concrete values or different types of symbolic
+  value depending on symbolic conditions.
+\end{itemize}
+
+But two other kinds of symbolic objects existed in the representation
+primarily to indicate that GL was unable to compute a ``good''
+representation for some subterm:
+
+\begin{itemize}
+\item function call -- representing a function applied to a list of
+  symbolic values
+\item variable -- representing a free variable of unknown type.
+\end{itemize}
+
+The new GL features described in this paper allow it to operate in a
+\em{term-oriented} manner, where the above function and variable
+representations can also be manipulated productively.  These features include:
+\begin{itemize}
+\item Conditional rewriting with user-defined rules integrated with the symbolic interpreter (Section~\ref{sec:rewriting})
+\item Generation and tracking of fresh Boolean variables representing the truth values of term-level objects (Section~\ref{sec:vargen})
+\item Rules to add constraints among the generated Boolean variables (Section~\ref{sec:constraintgen})
+\item Rewrite rules that merge \texttt{if} branches containing different term-level objects that could be represented in a common way (Section~\ref{sec:branchmerge})
+\item Rules to generate counterexamples from Boolean valuations for term-level objects (Section~\ref{sec:counterexes})
+\end{itemize}
+
+
+\subsection{Motivating Examples}
+
+
+\subsubsection{Abstracting Implementation Details}
+Suppose we are using the popular records library found in the
+community books file ``misc/records.lisp''
+\cite{kaufmann2002efficient}, and we have the following term:
+\begin{verbatim}
+ (s :a b nil)
+\end{verbatim}
+Supposing $\mathit{b}$ is a 4-bit integer, and we have its symbolic
+representation as a vector of 4 Boolean functions; we can represent
+the value of this call as:
+\begin{lstlisting}
+ '((:a . $\mathit{b}$))
+\end{lstlisting}
+But suppose instead that $\mathit{b}$ is a Boolean.  The default value
+of any key in a record is \texttt{nil}, so the \texttt{s} function
+does not add pairs to record structures when binding them to
+\texttt{nil}.  So the best we can do to represent this value is a term-like representation,
+\begin{lstlisting}
+  (if $\mathit{b}$  '((:a . t)) 'nil)
+\end{lstlisting}
+This effectively introduces a case-split: every further operation on
+this record must consider separately the case where $\mathit{b}$ is
+\texttt{t} versus \texttt{nil}.  We can easily get an exponential
+blowup in our representation by setting several keys to symbolic
+Boolean values.  This is especially annoying since the elision of
+pairs that bind keys to \texttt{NIL} is just an implementation detail
+of the library, not particularly relevant to the meaning of what is
+happening.
+
+A better way to deal with this is to avoid representing the record as
+a cons structure.  Instead, GL can treat the record library's
+\texttt{s} and \texttt{g} as uninterpreted, and use rewrite rules to
+resolve them.  For some proofs, the case-splitting version of the
+simple get-of-set rule suffices:
+\begin{verbatim}
+ (equal (g k1 (s k2 v r))
+        (if (equal k1 k2)
+            v
+          (g k1 r)))
+\end{verbatim}
+\noindent In general, a more comprehensive set of rules is required;
+we discuss these in Section \ref{sec:records}.
+
+\subsubsection{Reasoning about Unconstrained Variables and Accessors}
+Traditionally, most theorems proved using GL have had hypotheses
+constraining each variable to a type that could be represented using a
+bounded number of bits, such as \texttt{(unsigned-byte-p 8 x)}.  But
+in some cases this shouldn't be necessary because only certain bits
+are accessed from the variable regardless of its size or type.
+Consider:
+\begin{verbatim}
+ (equal (lognot (lognot (loghead 5 x))) (loghead 5 x))
+\end{verbatim}
+This is true for any value of \texttt{x}, even non-integers; but
+previously, GL would not be able to prove this without constraining
+\texttt{x} to be a member of a bounded type.  However, GL's new
+term-level capabilities include the ability to generate fresh Boolean
+variables to represent certain terms.  Specifically, GL generates a
+fresh Boolean variable for any \texttt{if} test that cannot be
+otherwise resolved to a symbolic Boolean value.  Therefore, a rewrite
+rule such as the following may be used to introduce new Boolean
+variables for a \texttt{loghead} such as that above.  (Note that the
+syntaxp test in this rule applies to the GL symbolic object
+representation, not an ACL2 term representation!)
+\begin{verbatim}
+  (implies (syntaxp (integerp n))
+           (equal (loghead n x)
+                  (if (zp n)
+                      0
+                    (logcons (if (logbitp 0 x) 1 0)
+                             (loghead (1- n) (ash x -1))))))
+\end{verbatim}
+This rewrite rule unwinds the \texttt{loghead} call of the theorem
+above.  Each \texttt{logbitp} call first simply produces a term-level
+representation, but then, since it is an \texttt{if} test, is
+introduced as a Boolean variable.  In particular, Boolean variables
+are introduced for the following terms:
+\begin{verbatim}
+(logbitp 0 x)
+(logbitp 0 (ash x -1))
+(logbitp 0 (ash (ash x -1) -1))
+(logbitp 0 (ash (ash (ash x -1) -1) -1))
+(logbitp 0 (ash (ash (ash (ash x -1) -1) -1) -1))
+\end{verbatim}
+These identical terms are generated twice, once for each call
+\texttt{(loghead 5 x)}, but the second time each one is recognized and
+the Boolean variable generated the first time is returned instead of
+generating a fresh one.
+
+
+
+
+
+\section{Conclusion}
+\label{sec:conclusion}
+\input{conclusion}
+
+\section*{Acknowledgements}
+
+% \nocite{*}
+\bibliographystyle{eptcs}
+\bibliography{paper}
+\end{document}
+
+
