@@ -39,7 +39,7 @@ Austin, TX, USA}
   methods such as BDD reasoning and satisfiability checking.  In its
   typical operation, GL recursively traverses a term, computing a
   symbolic object representing the value of each subterm.  In older
-  versions of of GL, each such symbolic object needed to reflect the
+  versions of GL, each such symbolic object needed to reflect the
   concrete structure of all possible values of its term, except for
   integer and Boolean subfields, for which bits could be represented
   symbolically using Boolean function objects.  In some cases, a term
@@ -127,7 +127,7 @@ new features supporting this in Section~\ref{sec:features} and discuss
 some implementation details that may be relevant to users in
 Section~\ref{sec:details}.  We show a complete set of rules for
 term-level manipulation of records in Section~\ref{sec:example}, then
-describe how this new feature set has been applied to a class of real
+describe how this new feature set has been applied to a class of
 industrial proofs in Section~\ref{sec:applications}. Some possible
 future extensions are discussed in Section~\ref{sec:future}.
 
@@ -228,7 +228,7 @@ variables to represent certain terms.  Specifically, GL generates a
 fresh Boolean variable for any \texttt{if} test that cannot be
 otherwise resolved to a symbolic Boolean value.  Therefore, a rewrite
 rule such as the following may be used to introduce new Boolean
-variables for a \texttt{loghead} such as that above.  (Note that the
+variables for a \texttt{loghead} call such as that above.  (Note that the
 syntaxp test in this rule applies to the GL symbolic object
 representation, not the ACL2 term representation!)
 \begin{verbatim}
@@ -272,13 +272,14 @@ such as \texttt{(logbitp $n$ (g $\var{field}$ x))}.
 \subsection{Generating Term-level Counterexamples from Boolean Counterexamples}
 \label{sec:counterexes}
 
-When GL proves a theorem such as \texttt{expand-loghead-bits} above,
-it produces a Boolean formula representing the result and then asks
+GL's method of proving a theorem is to obtain a Boolean formula 
+representing the conclusion and then ask
 whether it is valid, either by examination of the canonical BDD
 representation or by querying a SAT solver to determine whether the
 negation of the AIG is satisfiable.  When the result is valid (its
-negation is unsatisfiable), this implies that the conclusion is a
-theorem.  But when it is not valid, a contradiction at the Boolean
+negation is unsatisfiable), this proves the theorem, at least 
+when all side obligations are met.
+  But when it is not valid, a contradiction at the Boolean
 level does not directly yield a real counterexample to the theorem ---
 instead, it gives a Boolean valuation to each of the terms that were
 assigned Boolean variables as described above.\footnote{This problem
@@ -339,11 +340,13 @@ if we add the following rule, then it will instead assign 16 to
 \end{verbatim}
 This rule reads: ``If a term matching \texttt{(logbitp n i)} is
 assigned value \texttt{v}, then instead assign \texttt{i} the
-evaluation of \texttt{(bitops::install-bit n (bool->bit v) i)}.'  With
+evaluation of \texttt{(bitops::install-bit n (bool->bit v) i)}.''  With
 this rule in place GL correctly generates the counterexample \texttt{x
   = 16} for the above proof attempt.  These rules do not incur any
 proof obligations, since they are not used for anything relevant to
-soundness.
+soundness.  Note also that these operations are performed without 
+guard checking, so that installing a bit into \texttt{NIL} does not 
+cause an error.
 
 Counterexample rewrite rules work together to resolve nested accesses.
 For example, we could have another rule for dealing with record accesses:
@@ -496,8 +499,8 @@ example for the theory of records:
            (if c v (g k rec2))
            (if c rec1 rec2))))  
 \end{verbatim}
-\noindent The LHS of this rule should always be an \texttt{if} with a
-variable for the test and the else branch, but some function call for
+\noindent The LHS of this rule should always be an \texttt{if} with
+variables for the test and the else branch, but some function call for
 the \texttt{then} branch.  It is applied to both branches
 symmetrically, so in this case if a call of \texttt{s} appears in the
 else but not then branch, it will still be applied (it effectively
@@ -534,10 +537,10 @@ Here is an example:
 (gl::def-gl-thm plus-c-a-b-correct
   :hyp (and (unsigned-byte-p 9 (g :a st))
             (unsigned-byte-p 9 (g :b st)))
-  :concl (b* ((new-st (plus st :c :a :b))
-              (a (g :a st))
-              (b (g :b st))
-              (new-c (g :c new-st)))
+  :concl (let* ((new-st (plus st :c :a :b))
+                (a (g :a st))
+                (b (g :b st))
+                (new-c (g :c new-st)))
            (equal new-c (+ a b)))
   :g-bindings `((st ,(gl::g-call
                       's
@@ -549,11 +552,11 @@ Here is an example:
                                    (gl::g-int 10 1 10)
                                    (gl::g-var 'rest-of-st))
                              '(lambda (x)
-                                (CONS ':b
-                                      (CONS (G ':b X) (CONS X 'NIL))))))
+                                (cons ':b
+                                      (cons (g ':b x) (cons x 'nil))))))
                       '(lambda (x)
-                         (CONS ':A
-                               (CONS (G ':A X) (CONS X 'NIL)))))))
+                         (cons ':a
+                               (cons (g ':a x) (cons x 'nil)))))))
   :cov-theory-add '(nth-const-of-cons
                     s-same-g))
 \end{verbatim}
@@ -585,21 +588,31 @@ coverage obligation can be stated as follows:
 \end{verbatim}
 \noindent But \texttt{shape-spec-obj-in-range} does not directly
 support \texttt{g-call}, because it isn't possible to syntactically
-determine whether a function call can produce a given object.  So for
-a shape specifier \texttt{(g-call fn args inv)}, the clause processor
-uses the provided inverse function to generate a set of obligations.
-The inverse function should produce a list of length equal to the
-arity of \texttt{fn}.  When the \texttt{g-call} is supposed to cover
-some value \texttt{obj}, the inverse function applied to \texttt{obj}
-should produce an argument list on which \texttt{fn} then produces
-\texttt{obj}.  There are then two coverage obligations for the
-\texttt{g-call}:
+determine whether a function call can produce a given object.
+Instead, the proof obligations are generated recursively by a function
+\texttt{shape-spec-oblig-term}.  On any shape specifier that contains
+no \texttt{g-call} components, it simply generates a
+\texttt{shape-spec-obj-in-range} call.  On a \texttt{g-call} shape
+specifier, it uses the provided inverse function to generate a set of
+obligations that imply the proper coverage.  When a shape specifier
+\texttt{(g-call $\var{fn}$ $\var{args}$ $\var{inv}$)} is supposed to
+cover some value $\var{obj}$, the inverse function applied to
+$\var{obj}$ should produce an argument list on which $\var{fn}$ then
+produces $\var{obj}$.  (The inverse function should produce a list of
+length equal to the arity of \texttt{fn}.)  Furthermore, $\var{args}$
+should be shape specifiers that cover the argument list produced by
+the inverse function.
 \begin{enumerate}
 \item The function applied to the argument list produced by the
-  inverse function on the target object equals the target object.
+  inverse function on the target object equals the target object:
+\begin{lstlisting}
+ (equal (let ((inv-args (<$\var{inv}$> obj)))
+          (<$\var{fn}$> (nth 0 inv-args) <$\ldots$> (nth <$n$> inv-args)))
+        obj)
+\end{lstlisting}
 \item The shape specifiers of the argument list recursively cover the
   values produced by the inverse function when applied to the target
-  object.
+  object: the obligations showing this are generated by recursively calling \texttt{shape-spec-obj-in-range}.
 \end{enumerate}
 Together these imply that the target object is covered by the call.
 
@@ -687,10 +700,10 @@ function representation as follows:\footnote{Coded in
 \item If it is a cons, return constant true.
 \item If it is syntactically concrete, return constant true its value is if non-\texttt{nil}, constant false if \texttt{nil}.
 \item If it is an if-then-else, recursively extract the Boolean
-  function of the test.  If constant-true or constant-false, return
+  function of the test.  If that function is syntactically constant true or constant false, return
   the Boolean function of the corresponding branch; else get the
   Boolean functions of both branches and return the
-  formula \texttt{(if $\var{test}$ $\var{then}$ $\var{else}$)}.
+  Boolean if-then-else of the test and branches.
 \item If it is a variable term, return its associated Boolean variable
   if it has one, else generate a fresh Boolean variable, record its
   association, and return it.
