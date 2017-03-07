@@ -23,12 +23,12 @@
 \newcommand*{\var}[1]{\mathit{#1}}
 
 \title{Term-Level Reasoning In Support Of Bit-blasting}
-\author{Sol O. Swords
+\author{Sol Swords
 \institute{Centaur Techology, Inc.\\
 Austin, TX, USA}
 \email{sswords@centtech.com}
 }
-\def\titlerunning{FIXME}
+\def\titlerunning{Term-Level Reasoning In Support Of Bit-Blasting}
 \def\authorrunning{S. Swords}
 \begin{document}
 \maketitle
@@ -65,8 +65,8 @@ namely BDD reasoning or SAT solving \cite{bit-blasting-GL, gl-diss}.
 It works by computing bit-level symbolic representations of terms,
 which we also describe as symbolically executing them.  To prove a
 theorem, it computes such a representation of the theorem's conclusion
-and thus reduces it to a satisfiability check: if the Boolean formula
-representing the conclusion is a tautology, then the theorem is
+and thus reduces it to a satisfiability check: if the negation of the Boolean formula
+representing the conclusion is unsatisfiable, then the theorem is
 proved.
 
 This paper introduces term-level reasoning capabilities that are now
@@ -123,17 +123,23 @@ primarily for use in bad cases:
 The new GL features described in this paper allow it to operate in a
 {\em term-oriented} manner, where the above function and variable
 representations can also be manipulated productively.  We describe the
-new features supporting this in Section~\ref{sec:features}.  We show a
-complete set of rules for term-level manipulation of records in
-Section~\ref{sec:example}, then describe how this new feature set has
-been applied to a class of real industrial proofs in
-Section~\ref{sec:applications}. Some possible future extensions are
-discussed in Section~\ref{sec:future}.
+new features supporting this in Section~\ref{sec:features} and discuss
+some implementation details that may be relevant to users in
+Section~\ref{sec:details}.  We show a complete set of rules for
+term-level manipulation of records in Section~\ref{sec:example}, then
+describe how this new feature set has been applied to a class of real
+industrial proofs in Section~\ref{sec:applications}. Some possible
+future extensions are discussed in Section~\ref{sec:future}.
 
 \section{Term-level Features of GL}
 \label{sec:features}
 The term-level capabilities of GL consist of the following new
-features, each of which we motivate and briefly describe in this section:
+features. 
+While complete documentation of these features is beyond
+the scope of this paper (see the ACL2 community books
+documentation~\cite{acl2:doc}, including topic
+\href{http://www.cs.utexas.edu/users/moore/acl2/manuals/current/manual/?topic=GL____TERM-LEVEL-REASONING}{\underline{gl::term-level-reasoning}}), we motivate and briefly describe each of them in this section:
+
 \begin{itemize}
 \item Conditional rewriting with user-defined rules integrated with the symbolic interpreter (Section~\ref{sec:rewriting})
 \item Generation and tracking of fresh Boolean variables representing the truth values of term-level objects (Section~\ref{sec:vargen})
@@ -142,7 +148,6 @@ features, each of which we motivate and briefly describe in this section:
 \item Rules that merge \texttt{if} branches containing different term-level objects that could be represented in a common way (Section~\ref{sec:branchmerge})
 \item Support for binding theorem variables to shape specifiers representing function calls (Section~\ref{sec:callshapespec}).
 \end{itemize}
-Finally, we describe some implementation details that may be relevant to users in Section~\ref{sec:details}.
 
 \subsection{Abstracting Implementation Details with Rewriting}
 \label{sec:rewriting}
@@ -194,6 +199,15 @@ simple get-of-set rule suffices:
 \noindent In general, a more comprehensive set of rules is required;
 we discuss these in Section \ref{sec:example}.
 
+GL's rewriter supports a subset of the ACL2 rewriter's features.  It
+can use rules that rewrite on \texttt{equal} or \texttt{iff}
+equivalences.  It supports conditional rewriting by backchaining to
+relieve hypotheses.  It supports \texttt{syntaxp} hypotheses, but
+these aren't compatible with ACL2's syntaxp hypotheses, because ACL2's
+use term syntax whereas GL's use symbolic object syntax.  Some further
+improvements may be considered in future work; see Section
+\ref{sec:parity}.
+
 
 \subsection{Boolean Representations for Unconstrained Variables and Accessors}
 \label{sec:vargen}
@@ -216,7 +230,7 @@ otherwise resolved to a symbolic Boolean value.  Therefore, a rewrite
 rule such as the following may be used to introduce new Boolean
 variables for a \texttt{loghead} such as that above.  (Note that the
 syntaxp test in this rule applies to the GL symbolic object
-representation, not an ACL2 term representation!)
+representation, not the ACL2 term representation!)
 \begin{verbatim}
 (gl::def-gl-rewrite expand-loghead-bits
   (implies (syntaxp (integerp n))
@@ -255,7 +269,7 @@ accesses a fixed set of fields and a fixed number of bits of each
 field, then it can generate Boolean variables as above for the fields,
 such as \texttt{(logbitp $n$ (g $\var{field}$ x))}.
 
-\subsection{Generating Counterexamples from Boolean term valuations}
+\subsection{Generating Term-level Counterexamples from Boolean Counterexamples}
 \label{sec:counterexes}
 
 When GL proves a theorem such as \texttt{expand-loghead-bits} above,
@@ -270,34 +284,44 @@ instead, it gives a Boolean valuation to each of the terms that were
 assigned Boolean variables as described above.\footnote{This problem
   does not exist in traditional GL, where all variables of a
   conjecture are given bit-level symbolic representations by the
-  g-bindings.  These bit-level representations can simply be evaluated
-  under the given assignment to yield valuations for the term
-  variables.}  In the following example:
+  g-bindings, and no other Boolean variables are generated.  A
+  bit-level counterexample then directly yields valuations for the
+  term variables by evaluating their symbolic representations under
+  the counterexample assignment.}
+Consider the following example:
 \begin{verbatim}
-(gl::def-gl-thm lognot-of-loghead-is-loghead-lognot
+(gl::def-gl-thm minus-logext-minus-loghead-is-logext-loghead
    :hyp t
-   :concl (equal (loghead 5 (lognot (loghead 5 x)))
-                 (lognot (loghead 5 x)))
-   :g-bindings nil)
+   :concl (equal (- (logext 5 (- (loghead 5 x))))
+                 (logext 5 (loghead 5 x)))
+   :g-bindings nil
+   :rule-classes nil)
 \end{verbatim}
-a counterexample produced by the SAT solver assigned \texttt{T} to all
-the \texttt{logbitp} terms that make up the \texttt{loghead} (as
-described in the previous section).  We would like to translate the
-valuations for these terms, which represent the low 5 bits of
-\texttt{x}, into a value for \texttt{x} itself.  In this case, it
-seems obvious that we should assign \texttt{x} the value 31, or -1, or
-any integer whose lowest 5 bits are all set: there isn't a unique
-assignment satisfying the given Boolean valuation.  Additionally, it
-may or may not even be possible to set the term variables such that
-the terms all have their assigned values.  For example, a badly
-configured set of rewrite rules could result in \texttt{(logbitp 0 (ash x
-  -1))} and \texttt{(logbitp 1 x)} being assigned independent Boolean values;
-if those values differ, then there is no \texttt{x} for which both
-values hold.  Furthermore, since Boolean variables can be assigned to
-arbitrary terms, it could be an arbitrarily hard problem to
-simultaneously satisfy the Boolean valuations of the terms.  So we are
-looking for a heuristic solution that works in practice, since a total
-solution doesn't exist.
+For this conjecture, a counterexample produced by the SAT solver
+includes the following assignments for the \texttt{logbitp} terms that
+make up the \texttt{loghead} (as described in the previous section):
+\begin{verbatim}
+(logbitp 0 x) = NIL
+(logbitp 1 x) = NIL
+(logbitp 2 x) = NIL
+(logbitp 3 x) = NIL
+(logbitp 4 x) = T
+\end{verbatim}
+We would
+like to translate the valuations for these terms into a value for \texttt{x} itself.  In this
+case, it seems obvious that we should assign \texttt{x} the value 16,
+or -16, or any integer whose low 5 two's-complement bits are 16: there isn't a
+unique assignment satisfying the given Boolean valuation.
+Additionally, it may or may not even be possible to set the term
+variables such that the terms all have their assigned values.  For
+example, a badly configured set of rewrite rules could result in
+\texttt{(logbitp 0 (ash x -1))} and \texttt{(logbitp 1 x)} being
+assigned independent Boolean values; if those values differ, then
+there is no \texttt{x} for which both valuations hold.  Furthermore, since
+Boolean variables can be assigned to arbitrary terms, it could be an
+arbitrarily hard problem to simultaneously satisfy the Boolean
+valuations of the terms.  So we are looking for a heuristic solution
+that works in practice, since a total solution doesn't exist.
 
 Our solution is to allow the user to specify rewrite rules that
 describe how to update variables and subterms in response to
@@ -306,18 +330,20 @@ assignments to terms involving the variables may cause that value to
 be updated if appropriate rules are in place.  With no such rules, the
 above theorem fails to prove but the counterexample produced assigns
 \texttt{NIL} to \texttt{x}, which is a false counterexample.  However,
-with the following rule, we get a verified counterexample where
-\texttt{x=31}:
+if we add the following rule, then it will instead assign 16 to
+\texttt{x}, which is a real counterexample:
 \begin{verbatim}
 (gl::def-glcp-ctrex-rewrite
   ((logbitp n i) v)
-  (x (bitops::install-bit n (bool->bit v) i)))
+  (i (bitops::install-bit n (bool->bit v) i)))
 \end{verbatim}
 This rule reads: ``If a term matching \texttt{(logbitp n i)} is
 assigned value \texttt{v}, then instead assign \texttt{i} the
 evaluation of \texttt{(bitops::install-bit n (bool->bit v) i)}.'  With
 this rule in place GL correctly generates the counterexample \texttt{x
-  = 31} for the above proof attempt.
+  = 16} for the above proof attempt.  These rules do not incur any
+proof obligations, since they are not used for anything relevant to
+soundness.
 
 Counterexample rewrite rules work together to resolve nested accesses.
 For example, we could have another rule for dealing with record accesses:
@@ -392,6 +418,49 @@ such constraints are included in the formula to be checked, preventing
 the false counterexamples that led to our proof failure above.  With
 this constraint rule, the theorem proves.
 
+The distinction between bindings and body in a Boolean constraint rule
+has important effects on how the rule is applied.  All bindings must be
+matched to terms with existing Boolean variables before the rule applies.  So in the version
+above, both \texttt{(logbitp n x)} and \texttt{(integerp x)} terms
+must be encountered as \texttt{if} tests before the rule fires.
+We can rewrite the rule as follows so that the constraint is added as
+soon as a term matching \texttt{(logbitp n x)} is encountered:
+\begin{verbatim}
+(gl::def-gl-boolean-constraint logbitp-implies-integerp-stronger
+  :bindings ((bit0 (logbitp n x)))
+  :body (implies bit0 (integerp x)))
+\end{verbatim}
+
+Constraint rules can be used to perform a kind of forward reasoning.
+Suppose that we used terms such as
+\begin{verbatim}
+(logbitp 0 (ash (ash (... (ash x -1) ...) -1) -1))
+\end{verbatim}
+\noindent as our normal form for bits extracted from a variable
+\texttt{x}, rather than \texttt{(logbitp $n$ x)} (this occurs if we
+omit the rule \texttt{logbitp-of-ash-minus1} stated in Section~\ref{sec:vargen}).  The
+following two rules then suffice to prove our theorem:
+\begin{verbatim}
+(gl::def-gl-boolean-constraint logbitp-implies-nonzero
+  :bindings ((bit0 (logbitp n i)))
+  :body (implies bit0 (and (integerp i) (not (equal 0 i)))))
+
+(gl::def-gl-boolean-constraint nonzero-rsh-implies-nonzero
+  :bindings ((iszero (equal 0 (ash i -1))))
+  :body (implies (not iszero) (and (integerp i) (not (equal 0 i)))))
+\end{verbatim}
+\noindent Whenever a \texttt{logbitp} term is derived from the
+\texttt{loghead} in our theorem, this triggers the first rule.  The
+body of that rule is evaluated in an \texttt{if}-test-like context, so
+that \texttt{(integerp i)} and \texttt{(equal 0 i)} both are assigned
+Boolean variables if necessary.  Then if \texttt{i} matched a nesting
+of \texttt{ash} terms, the addition of \texttt{(equal 0 i)} will lead
+to the second rule firing repeatedly until \texttt{i} unifies with the
+innermost variable.  Together these set up a chain of implications so
+that ultimately, if the \texttt{logbitp} is true, it is known that the
+inner variable is an integer.
+
+
 \subsection{Rules to Unify Representations Between \texttt{if} Branches}
 \label{sec:branchmerge}
 
@@ -410,11 +479,11 @@ suppose each function \texttt{f$n$} in the term below produces a
 \end{verbatim}
 \noindent Proving this using ACL2 would likely require a case-split
 into 1024 cases, but those cases can all be represented simultaneously
-without blowup in the bits of one symbolic number.  Each \texttt{if}
+in the bits of one symbolic number.  Each \texttt{if}
 term produces a number on each branch, which are merged into a common
 symbolic representation before continuing on with the next term.
-These potential case splits are essentially offloaded onto the BDD
-engine or SAT solver.
+These potential case splits are then handled in the BDD engine or SAT
+solver rather than by explicit enumeration.
 
 To extend this feature to term-level representations, GL allows rules
 to merge branches of \texttt{if}s that result in different term-level
@@ -452,7 +521,7 @@ fixed number of bits, or a cons structure containing them.  The
 Boolean variable generation feature discussed in
 Section~\ref{sec:vargen} makes it possible to prove some practical
 theorems while leaving variables unbound (effectively binding them to
-term-level variables named after themselves).  But when using
+term-level variables named after themselves). But when using
 term-level features it can still be advantageous to choose a BDD
 variable ordering or otherwise control the representation of theorem
 variables.  The \texttt{g-call} shape specifier is a new feature that
@@ -509,7 +578,7 @@ variables satisfying the hypothesis can be reproduced by some
 evaluation of the shape specifiers.  The function
 \texttt{(shape-spec-obj-in-range val shape)} implies that \texttt{val}
 can be produced by some evaluation of \texttt{shape}, so usually, the
-coverage obligation can be stated as:
+coverage obligation can be stated as follows:
 \begin{verbatim}
  (implies (hyp vars)
           (shape-spec-obj-in-range shapes vars))
@@ -517,13 +586,14 @@ coverage obligation can be stated as:
 \noindent But \texttt{shape-spec-obj-in-range} does not directly
 support \texttt{g-call}, because it isn't possible to syntactically
 determine whether a function call can produce a given object.  So for
-each \texttt{g-call} shape specifier, the clause processor uses the
-provided inverse function to generate a set of obligations.  The
-inverse function should produce a list of length equal to the arity of
-the function, and the intention is that when it is applied to the
-object that the \texttt{g-call} is supposed to cover, it produces an
-argument list on which the function produces that object.
-There are then two coverage obligations for the \texttt{g-call}:
+a shape specifier \texttt{(g-call fn args inv)}, the clause processor
+uses the provided inverse function to generate a set of obligations.
+The inverse function should produce a list of length equal to the
+arity of \texttt{fn}.  When the \texttt{g-call} is supposed to cover
+some value \texttt{obj}, the inverse function applied to \texttt{obj}
+should produce an argument list on which \texttt{fn} then produces
+\texttt{obj}.  There are then two coverage obligations for the
+\texttt{g-call}:
 \begin{enumerate}
 \item The function applied to the argument list produced by the
   inverse function on the target object equals the target object.
@@ -531,6 +601,7 @@ There are then two coverage obligations for the \texttt{g-call}:
   values produced by the inverse function when applied to the target
   object.
 \end{enumerate}
+Together these imply that the target object is covered by the call.
 
 In the example above, the inverse function for each \texttt{g-call}
 produces a list of three values, corresponding to the arguments
@@ -543,23 +614,23 @@ satisfying obligation 1.\footnote{The fact that we don't need to
   assume that the input value is a record is due to a special property
   of the records library, which goes to some pains to ensure that its
   functions work together logically without type assumptions.}  The
-argument shape specifiers also cover the values: the keys are equal
-constants; the value shape specifiers are a 10-bit integer, which by
-the \texttt{unsigned-byte-p} hypotheses suffice to cover the specified
-components, and the \texttt{g-var} construct used as the innermost
-record can cover any object.
+shape specifiers for the arguments \texttt{(key val rec)} also cover the
+values: the keys are equal constants; the value shape specifiers are each
+10-bit integers, which by the \texttt{unsigned-byte-p} hypotheses
+suffice to cover the specified components, and the \texttt{g-var}
+construct used as the innermost record can cover any object.
 
-\subsection{Implementation Details}
+\section{Implementation Details}
 \label{sec:details}
 
-While complete documentation of all of these new GL features is beyond
-the scope of this paper (see the ACL2 community books
-documentation~\cite{acl2:doc}, including topic
-\href{http://www.cs.utexas.edu/users/moore/acl2/manuals/current/manual/?topic=GL____TERM-LEVEL-REASONING}{\underline{GL::TERM-LEVEL-REASONING}}),
-we mention here some implementation details relevant to successful use
-of these features.
+% we mention here some implementation details relevant to successful use
+% of these features.
 
-\subsubsection{Priority Order of Function Call Reductions}
+While an in-depth description of the implementation of these features
+is beyond the scope of this paper, we mention here some implementation
+details that may be relevant to users.
+
+\subsection{Priority Order of Function Call Reductions}
 As the GL symbolic interpreter crawls over a term, at each function
 call subterm it first interprets the arguments to the call, reducing
 them to symbolic objects (though possibly term-like ones).  Then there
@@ -567,7 +638,7 @@ are several reductions that may be used to resolve the function call
 to a symbolic object.  These reductions are affected by the setting of
 some functions as uninterpreted, as first discussed in
 Section~\ref{sec:rewriting}; these functions are stored in a table
-where their names are bound to \texttt{NIL} (not uninterpreted),
+where their names are bound to \texttt{NIL} (interpreted),
 \texttt{T} (uninterpreted), or \texttt{:CONCRETE-ONLY} (uninterpreted,
 but allowed to be concretely evaluated).  The reductions are listed
 here in the order they are considered.\footnote{This is coded in the
@@ -577,8 +648,9 @@ here in the order they are considered.\footnote{This is coded in the
   \texttt{def-gl-clause-processor}.}
 \begin{enumerate}
 \item If the arguments are all syntactically concrete (implying they
-  each have only one possible value), and the function is either not
-  uninterpreted or allowed to be concretely evaluated, then the
+  each have only one possible value), and the function is allowed to
+  be concretely evaluated (its uninterpreted setting is not
+  \texttt{T}), then the
   function is evaluated on the arguments' values using \href{http://www.cs.utexas.edu/users/moore/acl2/manuals/current/manual/?topic=ACL2____MAGIC-EV-FNCALL}{\underline{\texttt{magic-ev-fncall}}} and the resulting value is returned, properly quoted as a concrete object.
 \item Rewrite rules are read from the function's \texttt{lemmas}
   property; any rules whose runes are listed in the
@@ -589,6 +661,9 @@ here in the order they are considered.\footnote{This is coded in the
   current clause processor \cite{gl-diss} (see documentation topic
   \href{http://www.cs.utexas.edu/users/moore/acl2/manuals/current/manual/?topic=GL____CUSTOM-SYMBOLIC-COUNTERPARTS}{\underline{gl::custom-symbolic-counterparts}}),
   it is run on the arguments and its value returned.
+\item If the function is uninterpreted, a new function call object is
+  returned containing the function name applied to the argument
+  objects.
 \item Finally, the body of the function is interpreted with the
   arguments bound to its formals.  The particular definition used may
   be overridden; see documentation topic
@@ -610,7 +685,7 @@ function representation as follows:\footnote{Coded in
 \item If it is a symbolic Boolean, extract its Boolean function.
 \item If it is a symbolic number, return constant true.
 \item If it is a cons, return constant true.
-\item If it is a constant, return constant true if non-\texttt{nil}, constant false if \texttt{nil}.
+\item If it is syntactically concrete, return constant true its value is if non-\texttt{nil}, constant false if \texttt{nil}.
 \item If it is an if-then-else, recursively extract the Boolean
   function of the test.  If constant-true or constant-false, return
   the Boolean function of the corresponding branch; else get the
@@ -634,7 +709,8 @@ function representation as follows:\footnote{Coded in
   constraint database, and return the variable.
 \end{enumerate}
 
-If the resulting Boolean function is syntactically constant, then only
+If the resulting Boolean function is syntactically constant
+or known true or false under the path condition, then only
 one of the two branches needs to be followed, and no merging is
 necessary.  Otherwise, each branch is symbolically interpreted with
 the path condition updated to reflect the required value of the test,
@@ -650,7 +726,7 @@ and the results are merged.  Merging works as follows:\footnote{Coded
   symbolically interpret the resulting term.
 \item Similarly if the $\var{else}$ branch is a function call or
   cons object, try to rewrite the inverted \texttt{if} term
-  \texttt{(if $~\var{test}$ $\var{else}$ $\var{then}$)} with branch
+  \texttt{(if $\neg\var{test}$ $\var{else}$ $\var{then}$)} with branch
   merge rules.
 \item If both branches are calls of the same function or both
   conses, recursively merge the corresponding arguments and
@@ -700,6 +776,11 @@ It is often desirable to normalize the ordering of keys in nests of
                       (s k1 v1 x)
                     (s k2 v2 (s k1 v1 x))))))
 \end{verbatim}
+Other disciplines for organizing the record structure may perform
+better in certain contexts: it might be preferable to avoid sorting
+keys, or to transform the terms to specialized structures such as
+trees or fast alists.
+
 To generate good counterexamples for theorems involving \texttt{g} and
 \texttt{s}, the following rule shows how to update a record so that
 the given key is bound to a particular value:
@@ -780,7 +861,9 @@ The syntaxp check here ensures that we don't rewrite our
 This rewriting strategy isn't complete for proving equality or
 inequality between records.  For example, if we have a comparison of
 two different variables and an assumption that they differ on some
-key, we don't resolve the equality to false.
+key, we don't resolve the equality to false.  However, it does suffice for
+the common usage pattern of showing that a machine model
+running some program produces the same final state as a specification.
 
 \section{Application}
 \label{sec:applications}
@@ -821,6 +904,7 @@ and also for some block composition theorems.
 \label{sec:future}
 
 \subsection{Fixtypes Support}
+\label{sec:fixtypes}
 The FTY library (see documentation for
 \href{http://www.cs.utexas.edu/users/moore/acl2/manuals/current/manual/?topic=ACL2____FTY}{FTY})
 provides automation for defining (mutually-)recursive sum-of-products,
@@ -836,20 +920,27 @@ logical version of the code is used and guards are ignored.  Even when
 using concrete values, each call to a fixing function from the
 symbolic interpreter must first check its guard.
 
-The FTY type definition events leave behind information in ACL2 tables
-that fully describe the types.  It would be reasonable to use this
+For cases where the fixing discipline becomes a practical problem, it
+may be a better approach to treat the types involved as abstract
+datatypes.  The FTY library already provides rewrite rules for the
+ACL2 rewriter that do this, and some of these could already be used in
+GL simply by adding them to the GL rewriter's rule table.  Other rules
+necessary for GL to effectively reason about an FTY type could be
+generated automatically.  The FTY
+type definition events leave behind information in ACL2 tables that
+fully describe the types.  It would be reasonable to use this
 information to generate a GL term-level theory for a given FTY type.
 
 \subsection{Feature Parity with the ACL2 Rewriter}
-
+\label{sec:parity}
 GL's rewriter is missing several important features of ACL2's
 simplifier.  We list these in order from most to least likely to be
-useful enough to overcome the work of implementation.
+worth the implementation effort.
 \begin{itemize}
 \item Bind-free and binding hypotheses are useful for effective
   programming of the rewriter and would be relatively easy to
   implement.  The primary burden would be to modify the correctness
-  proof of the rewriter/symbolic interpreter; we would show that these
+  proof of the rewriter/symbolic interpreter; we would need to show that these
   hypotheses only extend the current bindings with free variables, and
   that such extensions to the bindings are allowable when applying a
   rewrite rule.
@@ -878,15 +969,38 @@ useful enough to overcome the work of implementation.
 
 \item Forward-chaining is an ACL2 feature that also doesn't fit
   cleanly into GL's paradigm, for similar reasons as for free-variable
-  matching hypotheses.  We could allow constraint  forward reasoning when adding
+  matching hypotheses.  We could allow forward reasoning when adding
   an \texttt{if} test to the path condition, which would require some
-  non-insurmountable amount of new implementation work.
-
+  non-insurmountable amount of new implementation work.  The Boolean
+  variable constraint system (Section \ref{sec:constraintgen}) already
+  allows forward reasoning after a fashion, but this doesn't affect
+  rewriting directly since the constraints generated are currently
+  only used in Boolean proofs.
 \end{itemize}
+
+\subsection{Debugging Support}
+
+GL currently does not have any support beyond ACL2's \texttt{trace\$}
+utility for debugging failed term-level proofs.  While
+\texttt{trace\$} is extremely useful to a user knowledgeable enough
+about implementation details to know what functions to trace,
+targeted debugging tools such as ACL2's 
+\href{http://www.cs.utexas.edu/users/moore/acl2/manuals/current/manual/?topic=ACL2____BREAK-REWRITE}{break-rewrite}
+would be a drastic usability improvement.
+
 \section{Conclusion}
 \label{sec:conclusion}
 
+This paper describes extensions to the GL bitblasting framework that
+allow it to deal in abstract terms, rather than a limited value-like
+representation.  The GL framework is available under a permissive
+license in the ACL2 community books.
+
 \section*{Acknowledgements}
+We would like to acknowledge Jared Davis for helpful conversations
+during the implementation of the features discussed, and Shilpi Goel
+for testing out some of these features during her dissertation
+research.
 
 % \nocite{*}
 \bibliographystyle{eptcs}

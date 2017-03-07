@@ -9,6 +9,18 @@
 (include-book "centaur/bitops/install-bit" :dir :system)
 (local (include-book "centaur/bitops/ihsext-basics" :dir :system))
 
+(gl::gl-satlink-mode)
+(value-triple (tshell-start))
+
+(defun my-satlink-config ()
+  (declare (Xargs :guard t))
+  (satlink::make-config
+   :cmdline "glucose -model"
+   :verbose t
+   :mintime 1))
+
+(defattach gl::gl-satlink-config my-satlink-config)
+
 (gl::def-gl-rewrite expand-loghead-bits
   (implies (syntaxp (integerp n))
            (equal (loghead n x)
@@ -20,19 +32,25 @@
                           (logtail 1 x)
                           (logbitp 0 x)))))
 
-(gl::def-gl-rewrite logbitp-of-ash-minus1
-  (implies (syntaxp (integerp n))
-           (equal (logbitp n (ash x -1))
-                  (logbitp (+ 1 (nfix n)) x))))
 
-(gl::gl-satlink-mode)
-(value-triple (tshell-start))
+;; this theorem needs expand-loghead-bits, but works with or without logbitp-of-ash-minus1
+(gl::def-gl-thm lognot-lognot-of-loghead-1
+    :hyp t
+    :concl (equal (lognot (lognot (loghead 5 x))) (loghead 5 x))
+    :g-bindings nil
+    :rule-classes nil)
 
-(gl::def-gl-thm lognot-lognot-of-loghead
-  :hyp t
-  :concl (equal (lognot (lognot (loghead 5 x))) (loghead 5 x))
-  :g-bindings nil
-  :rule-classes nil)
+(encapsulate nil
+  (local (gl::def-gl-rewrite logbitp-of-ash-minus1
+           (implies (syntaxp (integerp n))
+                    (equal (logbitp n (ash x -1))
+                           (logbitp (+ 1 (nfix n)) x)))))
+
+  (gl::def-gl-thm lognot-lognot-of-loghead-2
+    :hyp t
+    :concl (equal (lognot (lognot (loghead 5 x))) (loghead 5 x))
+    :g-bindings nil
+    :rule-classes nil))
 
 ;; (gl::def-gl-rewrite expand-logext-bits
 ;;   (implies (syntaxp (integerp n))
@@ -45,22 +63,51 @@
 ;;                           (logtail 1 x)
 ;;                           (logbitp 0 x)))))
 
-(gl::def-glcp-ctrex-rewrite
-  ((ash x -1) y)
-  (x (logapp 1 x y)))
+(encapsulate nil
+  ;; clear the ctrex-rewrite table to demo this getting a false counterexample
+  (local (table gl::glcp-ctrex-rewrite nil nil :clear))
 
-(gl::def-glcp-ctrex-rewrite
-  ((logbitp n x) y)
-  (x (bitops::install-bit n (bool->bit y) x)))
+  (must-fail
+   ;; generates a false counterexample
+   (gl::def-gl-thm minus-logext-minus-loghead-is-logext-loghead
+     :hyp t
+     :concl (equal (- (logext 5 (- (loghead 5 x))))
+                   (logext 5 (loghead 5 x)))
+     :g-bindings nil
+     :rule-classes nil)))
 
+(encapsulate nil
+  ;; clear the ctrex-rewrite table and install the two necessary rules to get a real counterexample
+  (local (table gl::glcp-ctrex-rewrite nil nil :clear))
+
+
+
+  (gl::def-glcp-ctrex-rewrite
+    ((ash x -1) y)
+    (x (logapp 1 x y)))
+
+  (gl::def-glcp-ctrex-rewrite
+    ((logbitp n x) y)
+    (x (bitops::install-bit n (bool->bit y) x)))
+
+  (must-fail
+   ;; generates a real counterexample
+   (gl::def-gl-thm minus-logext-minus-loghead-is-logext-loghead
+     :hyp t
+     :concl (equal (- (logext 5 (- (loghead 5 x))))
+                   (logext 5 (loghead 5 x)))
+     :g-bindings nil
+     :rule-classes nil)))
+
+
+;; These don't work without the logbitp => integerp constraint
 (must-fail
- (gl::def-gl-thm minus-logext-minus-loghead-is-logext-loghead
+ (gl::def-gl-thm loghead-when-not-integer
    :hyp t
-   :concl (equal (- (logext 5 (- (loghead 5 x))))
-                 (logext 5 (loghead 5 x)))
-   :g-bindings nil
-   :rule-classes nil))
-
+   :concl (equal (and (integerp x)
+                      (equal (loghead 5 x) 16))
+                 (equal (loghead 5 x) 16))
+   :g-bindings nil))
 
 (must-fail
  (gl::def-gl-thm loghead-4-of-ifix
@@ -68,48 +115,67 @@
    :concl (equal (loghead 4 (ifix x)) (loghead 4 x))
    :g-bindings nil))
 
-;; needed if using (logbitp n x) normal form for bits:
-(gl::def-gl-boolean-constraint logbitp-implies-integerp
-  :bindings ((bit0 (logbitp n x))
-             (intp (integerp x)))
-  :body (implies bit0 intp)
-  :hints (("goal" :expand ((logbitp n x) (logcar x) (logcdr x)))))
+(encapsulate nil
+
+  ;; use the (logbitp n x) normal form for bits
+  (local (gl::def-gl-rewrite logbitp-of-ash-minus1
+           (implies (syntaxp (integerp n))
+                    (equal (logbitp n (ash x -1))
+                           (logbitp (+ 1 (nfix n)) x)))))
+  
+  ;; this constraint suffices when using the (logbitp n x) form:
+  (local
+   (gl::def-gl-boolean-constraint logbitp-implies-integerp
+     :bindings ((bit0 (logbitp n x))
+                (intp (integerp x)))
+     :body (implies bit0 intp)
+     :hints (("goal" :expand ((logbitp n x) (logcar x) (logcdr x))))))
+  
+  (gl::def-gl-thm loghead-when-not-integer-1
+    :hyp t
+    :concl (equal (and (integerp x)
+                       (equal (loghead 5 x) 16))
+                  (equal (loghead 5 x) 16))
+    :g-bindings nil)
+
+  (gl::def-gl-thm loghead-4-of-ifix-1
+    :hyp t
+    :concl (equal (loghead 4 (ifix x)) (loghead 4 x))
+    :g-bindings nil))
+
+(encapsulate nil
+
+  ;; don't use the (logbitp n x) normal form for bits -- stick with
+  ;; (logbitp 0 (ash .... -1))
+
+  ;; need both of these when using (logbitp 0 (ash ... -1)) normal form:
+  (local (gl::def-gl-boolean-constraint logbitp-implies-nonzero
+           :bindings ((bit0 (logbitp n x)))
+           :body (implies bit0 (and (not (equal 0 x)) (integerp x)))
+           :hints (("goal" :expand ((logbitp n x) (logcar x) (logcdr x))))))
+
+  (local (gl::def-gl-boolean-constraint nonzero-rsh-implies-nonzero
+           :bindings ((iszero (equal 0 (ash x -1))))
+           :body (implies (not iszero) (and (not (equal 0 x)) (integerp x)))
+           :hints (("goal" :expand ((logbitp n x) (logcar x) (logcdr x) (logtail 1 x))))))
+
+  
+  (gl::def-gl-thm loghead-when-not-integer-2
+    :hyp t
+    :concl (equal (and (integerp x)
+                       (equal (loghead 5 x) 12))
+                  (equal (loghead 5 x) 12))
+    :g-bindings nil)
+
+  (gl::def-gl-thm loghead-4-of-ifix-2
+    :hyp t
+    :concl (equal (loghead 4 (ifix x)) (loghead 4 x))
+    :g-bindings nil))
 
 
-;; needed if using (logbitp 0 (ash ... -1)) normal form:
-(gl::def-gl-boolean-constraint logbitp-implies-nonzero
-  :bindings ((bit0 (logbitp n x)))
-  :body (implies bit0 (and (not (equal 0 x)) (integerp x)))
-  :hints (("goal" :expand ((logbitp n x) (logcar x) (logcdr x)))))
 
-(gl::def-gl-boolean-constraint nonzero-rsh-implies-nonzero
-  :bindings ((iszero (equal 0 (ash x -1))))
-  :body (implies (not iszero) (and (not (equal 0 x)) (integerp x)))
-  :hints (("goal" :expand ((logbitp n x) (logcar x) (logcdr x) (logtail 1 x)))))
 
-;; (gl::def-gl-boolean-constraint ash-minus1-implies-integerp
-;;   :bindings ((zero (equal 0 (ash x -1)))
-;;              (intp (integerp x)))
-;;   :body (implies (not intp) (if zero t nil))
-;;   :hints (("goal" :expand ((ash x -1)))))
 
-;; (gl::def-gl-boolean-constraint ash-minus1-when-zero
-;;   :bindings ((zero-next (equal 0 (ash x -1)))
-;;              (zero (equal 0 x)))
-;;   :body (implies zero zero-next))
-
-;; (gl::def-gl-boolean-constraint zero-implies-bit0
-;;   :bindings ((bit0 (logbitp 0 x))
-;;              (zero (equal 0 x)))
-;;   :body (implies (if zero t nil) (not bit0)))
-
-(gl::def-gl-thm foo
-  :hyp t
-  :concl (equal (and (integerp x)
-                     (equal (loghead 5 x) 16))
-                (equal (loghead 5 x) 16))
-  :g-bindings nil)
-                  
 
 (defun plus (st dest src1 src2)
   (s dest (loghead 10 (+ (g src1 st) (g src2 st))) st))
@@ -349,6 +415,7 @@
                               initst))))))
   :g-bindings nil)
 
+;; Validcounterexamples:
 (must-fail
  (gl::def-gl-thm simple-machine-logcount-final-st-ctrex
    :hyp t
@@ -475,9 +542,11 @@
     (simple-machine-symrun (cdr prog) (simple-machine-symstep (car prog) st))))
 
 
-
+#||
 (trace$ (simple-machterm-p :entry (list 'simple-machterm-p (car x)) :exit (list 'simple-machterm-p (car x))))
+||#
 
+;; this demos how often simple-machterm-p gets called during symbolic execution by default
 (def-gl-thm simple-machine-symrun-of-simple-machine-bitcount-correct
   :hyp t
   :concl (b* ((initst (s 'v (simple-machterm-var 'v) emptyst))
@@ -485,11 +554,7 @@
               (c-term (g 'c finalst)))
            (equal (simple-machterm-eval c-term env)
                   (logcount (loghead 32 (g 'v env)))))
-  :g-bindings nil)
-
-
-(- 332285 329933)
-                                 
+  :g-bindings nil)                                 
 
 
 (gl::gl-set-uninterpreted simple-machterm-fix)
@@ -537,7 +602,7 @@
 (gl::add-gl-rewrite simple-machterm-immed->imm-of-simple-machterm-immed)
 
 
-(def-gl-thm simple-machine-symrun-of-simple-machine-bitcount-correct
+(def-gl-thm simple-machine-symrun-of-simple-machine-bitcount-correct-2
   :hyp t
   :concl (b* ((initst (s 'v (simple-machterm-var 'v) emptyst))
               (finalst (simple-machine-symrun *simple-machine-bitcount* initst))
@@ -547,63 +612,3 @@
   :g-bindings nil)
 
 
-
-
-
-
-(include-book "misc/equal-by-g-help" :dir :system)
-(in-theory (disable g-worseguy))
-(defun rec-unequal-witness (x y)
-  (cadr (g-worseguy x y)))
-
-(gl::gl-set-uninterpreted rec-unequal-witness)
-
-(defthm equal-by-rec-unequal-witness
-  (iff (equal x y)
-       (b* ((k (rec-unequal-witness x y)))
-         (equal (g k x) (g k y))))
-  :rule-classes nil)
-(in-theory (Disable rec-unequal-witness))
-
-(defun gs-equal (k x y)
-  (equal (g k x) (g k y)))
-
-(gl::gl-set-uninterpreted gs-equal)
-
-(gl::def-gl-rewrite equal-of-s-to-gs-equal
-  (equal (equal (s k v x) y)
-         (gs-equal (rec-unequal-witness (s k v x) y)
-                   (s k v x) y))
-  :hints (("goal" :use ((:instance equal-by-rec-unequal-witness
-                         (x (s k v x)))))))
-
-(gl::def-gl-rewrite equal-of-s-to-gs-equal2
-  (equal (equal y (s k v x))
-         (gs-equal (rec-unequal-witness (s k v x) y)
-                   (s k v x) y))
-  :hints (("goal" :use ((:instance equal-by-rec-unequal-witness
-                         (x (s k v x)))))))
-
-(gl::def-gl-rewrite gs-equal-of-s
-  (equal (gs-equal key (s k v x) y)
-         (if (equal key k)
-             (equal v (g k y))
-           (gs-equal key x y))))
-
-(gl::def-gl-rewrite gs-equal-of-s2
-  (equal (gs-equal key y (s k v x))
-         (if (equal key k)
-             (equal v (g k y))
-           (gs-equal key x y))))
-
-
-(gl::def-gl-rewrite gs-equal-base-case
- (implies (and (syntaxp (and (not (and (consp x)
-                                       (eq (gl::tag x) :g-apply)
-                                       (eq (gl::g-apply->fn x) 's)))
-                             (not (and (consp y)
-                                       (eq (gl::tag y) :g-apply)
-                                       (eq (gl::g-apply->fn y) 's)))))
-               (equal x y))
-          (equal (gs-equal key x y)
-                 t)))
